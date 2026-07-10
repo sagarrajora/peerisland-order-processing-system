@@ -133,7 +133,49 @@ race-condition scenario) landed as automated tests in Phase 3
 
 ## Phase 3 — tests
 
-_Not started yet._
+**Prompt used:** the "Phase 3 — tests" prompt — Jest + Supertest coverage for
+create/get/list/status-transitions/cancel plus the background job using fake
+timers, without relying on the real 5-minute interval or sharing state
+between test files.
+
+**What Claude produced and what needed a second look:**
+
+1. **First draft had each test file creating its own `supertest` app but no
+   shared teardown**, which would have reproduced the assignment's called-out
+   pitfall of tests leaking state through the singleton in-memory repository
+   (`orderRepository` is a module-level `Map`, not recreated per test).
+   Fixed by adding `jest.config.js` with `setupFilesAfterEnv` pointing at
+   `tests/setup.js`, which calls `orderRepository.clear()` in a global
+   `afterEach` — every test file gets a clean repository without repeating
+   that boilerplate everywhere.
+2. **The background job tests initially only checked the "happy path"**
+   (PENDING moves to PROCESSING after the interval) and a "CANCELLED/SHIPPED
+   untouched" case using *pre-existing* state — which doesn't actually
+   exercise the race condition described in Phase 2, only its aftermath.
+   Added a third test that uses `jest.spyOn(orderService, 'updateOrderStatus')`
+   to inject a cancel call *in the middle of* `job.runOnce()`'s loop (cancelling
+   order B while order A is mid-transition), then asserts order B ends up
+   `CANCELLED` and `transitioned` only counts order A. This is the test that
+   would actually fail if the job read a stale snapshot instead of
+   re-checking status per order.
+3. **Fake timers needed `jest.useFakeTimers()` + `advanceTimersByTime()`**,
+   not real waits — confirmed `PENDING_ORDERS_JOB_INTERVAL_MS` is read fresh
+   on each `start()` call so setting it per-test in `beforeEach` actually
+   takes effect, and added `job.stop()` / `jest.clearAllTimers()` /
+   `jest.restoreAllMocks()` in `afterEach` so the module-level `timer` and the
+   `updateOrderStatus` spy from test 3 don't leak into later tests in the
+   same file.
+4. **Status-transition tests explicitly include the two invalid transitions
+   named in the assignment** (`PENDING -> DELIVERED`, `DELIVERED -> SHIPPED`)
+   plus a third one specific to this codebase's design: `PATCH
+   /orders/:id/status { status: "CANCELLED" }`, asserting it's rejected with
+   409 rather than silently succeeding — the exact bug documented as fixed in
+   the Phase 1 log entry, now covered by a regression test instead of just a
+   one-time manual `curl` check.
+
+**Verification:** `npm test` — 6 suites, 26 tests, all passing; no
+"Jest did not exit" warning, confirming the job's `unref()`'d timer and the
+per-test `stop()`/`clearAllTimers()` calls leave no open handles.
 
 ## Phase 4 — review pass
 

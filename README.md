@@ -3,17 +3,16 @@
 A REST API for an e-commerce order processing system: place orders, look them
 up, list/filter them, and move them through a status lifecycle.
 
-> **Status:** Phase 1 (scaffold + core API) and Phase 2 (background job)
-> complete. Phase 3 (test suite) lands in a follow-up commit — see
-> `peerislands-assignment-prompt.md` for the phase breakdown and `AI_USAGE.md`
-> for the AI-assistance log.
+> **Status:** Phase 1 (scaffold + core API), Phase 2 (background job), and
+> Phase 3 (test suite) complete — see `peerislands-assignment-prompt.md` for
+> the phase breakdown and `AI_USAGE.md` for the AI-assistance log.
 
 ## Stack
 
 - Node.js 20+, Express
 - Zod for request validation
 - In-memory data store behind a repository interface (see below)
-- Jest + Supertest for tests (added in Phase 3)
+- Jest + Supertest for tests
 
 ## Setup
 
@@ -38,7 +37,7 @@ src/
   validation/         Zod schemas for request bodies/queries
   middleware/         validate(), centralized errorHandler
   jobs/              Background jobs (processPendingOrdersJob)
-tests/               Jest + Supertest suite (Phase 3)
+tests/               Jest + Supertest suite
 ```
 
 Business logic lives in `services/`, not `controllers/` — controllers only
@@ -182,6 +181,27 @@ is currently `PENDING`. Otherwise `409 CONFLICT` naming the current status.
   (non-empty items, positive quantity, non-negative price, valid enum values)
   is declared once as a schema and reused by a small `validateBody`/
   `validateQuery` middleware pair.
+
+## Testing
+
+```bash
+npm test
+```
+
+- `tests/orders.*.test.js` cover create/get/list/status-transition/cancel
+  through the HTTP layer with Supertest, including the invalid-input and
+  invalid-transition cases (empty items, bad quantity/price, invalid status
+  filter, `PENDING -> DELIVERED`, `DELIVERED -> SHIPPED`, cancel on a
+  non-`PENDING` order).
+- `tests/backgroundJob.test.js` covers the job with Jest fake timers: setting
+  `PENDING_ORDERS_JOB_INTERVAL_MS` to a small value, advancing time instead of
+  waiting on a real interval, confirming `CANCELLED`/`SHIPPED` orders are left
+  alone, and a targeted test that mocks `orderService.updateOrderStatus` to
+  simulate a cancel landing mid-run — proving the job's own transition call
+  re-checks status rather than trusting its snapshot.
+- `tests/setup.js` runs `orderRepository.clear()` after every test
+  (`jest.config.js` → `setupFilesAfterEnv`) so state never leaks between test
+  files, since the repository is a module-level singleton.
 
 ## Adding authentication (not implemented)
 

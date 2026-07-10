@@ -3,9 +3,19 @@ const { orderRepository } = require('../repositories/orderRepository');
 const { ORDER_STATUS, canTransition } = require('../models/orderStatus');
 const { NotFoundError, ConflictError } = require('../utils/errors');
 
+// items.reduce(...) alone can produce values like 3.3000000000000003 for
+// perfectly ordinary inputs (e.g. quantity 3, price 1.1) because of binary
+// floating-point representation. Round to the nearest cent so totalAmount is
+// always a clean two-decimal money value.
+function roundToCents(amount) {
+  return Math.round((amount + Number.EPSILON) * 100) / 100;
+}
+
 function placeOrder({ customerId, items }) {
   const now = new Date().toISOString();
-  const totalAmount = items.reduce((sum, item) => sum + item.quantity * item.price, 0);
+  const totalAmount = roundToCents(
+    items.reduce((sum, item) => sum + item.quantity * item.price, 0)
+  );
 
   const order = {
     id: randomUUID(),

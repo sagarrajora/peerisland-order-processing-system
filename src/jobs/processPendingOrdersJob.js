@@ -1,5 +1,6 @@
 const orderService = require('../services/orderService');
 const { ORDER_STATUS } = require('../models/orderStatus');
+const { ConflictError } = require('../utils/errors');
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -29,9 +30,15 @@ function runOnce() {
       orderService.updateOrderStatus(order.id, ORDER_STATUS.PROCESSING);
       transitioned += 1;
     } catch (err) {
-      console.warn(
-        `[processPendingOrdersJob] skipped order ${order.id}: ${err.message}`
-      );
+      // A ConflictError here means the order's status changed between the
+      // snapshot above and this line (e.g. it was cancelled) - expected and
+      // safe to skip. Anything else is a real bug and shouldn't be logged
+      // as if it were an ordinary race skip, or it'll go unnoticed.
+      if (err instanceof ConflictError) {
+        console.warn(`[processPendingOrdersJob] skipped order ${order.id}: ${err.message}`);
+      } else {
+        console.error(`[processPendingOrdersJob] unexpected error processing order ${order.id}:`, err);
+      }
     }
   }
 

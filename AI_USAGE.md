@@ -86,7 +86,50 @@ codes and response bodies were unaffected.
 
 ## Phase 2 — background job
 
-_Not started yet._
+**Prompt used:** the "Phase 2 — background job" prompt from
+`peerislands-assignment-prompt.md` — add a job that moves `PENDING` orders to
+`PROCESSING` every 5 minutes, configurable, reusing the API's transition
+logic, with the cancel/job race explicitly handled and explained, start/stop
+exported for tests, and per-run logging.
+
+**What Claude produced and what needed a second look:**
+
+1. **First instinct was a plain `setInterval(runOnce, getIntervalMs())` with
+   no `unref()`.** That matches one of the known failure modes for this
+   assignment — a hard-coded, un-stoppable interval that keeps the process
+   (and Jest) alive after tests finish. Fixed by calling `timer.unref()` in
+   `start()` so the interval never holds the event loop open on its own, and
+   by exporting `stop()` (`clearInterval` + reset the module-level `timer` to
+   `null`) so both `server.js` and tests fully control the job's lifetime.
+2. **Race condition between cancel and the job.** The naive approach would be
+   to snapshot `PENDING` orders and then mutate each one directly (or call
+   `repository.save()` on the snapshot), which is exactly the "read stale
+   status, write it back" bug the assignment calls out — a cancel that lands
+   after the snapshot gets silently overwritten back to `PROCESSING`. Instead
+   the job calls `orderService.updateOrderStatus(order.id, PROCESSING)` per
+   order — the same function the API uses — which re-fetches the order by id
+   and re-validates `canTransition()` against its status *at write time*, not
+   the snapshot. A cancelled order fails that check and is skipped (logged,
+   not thrown out of the run). This is documented in the README's
+   "Background job" section rather than left implicit.
+3. **Duplicated status logic was the tempting shortcut.** It would have been
+   easy to give the job its own inline `if (order.status === 'PENDING')`
+   check and a direct repository write "since it's simpler." Rejected that in
+   favor of routing through `orderService.updateOrderStatus`, per the
+   assignment's explicit "no duplicate status logic" requirement — there is
+   now exactly one place (`src/models/orderStatus.js` + `orderService`) that
+   knows what transitions are legal.
+4. **Env var interval must be read at call time, not cached at module load.**
+   Reading `process.env.PENDING_ORDERS_JOB_INTERVAL_MS` once at the top of the
+   file would freeze the value before tests get a chance to set it per-test.
+   `getIntervalMs()` is a plain function called inside `start()`, so setting
+   the env var before calling `start()` in a test works as expected.
+
+**Verification:** ran `node -e` against a short-lived instance of the module
+locally to confirm `start()`/`stop()` toggle a real interval and `runOnce()`
+logs a `checked/transitioned` count; full behavioral coverage (including the
+race-condition scenario) landed as automated tests in Phase 3
+(`tests/backgroundJob.test.js`) rather than being re-verified by hand twice.
 
 ## Phase 3 — tests
 

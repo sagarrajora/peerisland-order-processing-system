@@ -3,8 +3,8 @@
 A REST API for an e-commerce order processing system: place orders, look them
 up, list/filter them, and move them through a status lifecycle.
 
-> **Status:** Phase 1 (scaffold + core API) complete. Phase 2 (background job)
-> and Phase 3 (test suite) land in follow-up commits — see
+> **Status:** Phase 1 (scaffold + core API) and Phase 2 (background job)
+> complete. Phase 3 (test suite) lands in a follow-up commit — see
 > `peerislands-assignment-prompt.md` for the phase breakdown and `AI_USAGE.md`
 > for the AI-assistance log.
 
@@ -37,7 +37,7 @@ src/
   models/            Order status enum + allowed transitions (single source of truth)
   validation/         Zod schemas for request bodies/queries
   middleware/         validate(), centralized errorHandler
-  jobs/              Background jobs (Phase 2)
+  jobs/              Background jobs (processPendingOrdersJob)
 tests/               Jest + Supertest suite (Phase 3)
 ```
 
@@ -127,6 +127,39 @@ curl -X PATCH http://localhost:3000/orders/<id>/status \
 
 `POST /orders/:id/cancel` -> `200` with status `CANCELLED`, only if the order
 is currently `PENDING`. Otherwise `409 CONFLICT` naming the current status.
+
+## Background job
+
+`src/jobs/processPendingOrdersJob.js` runs on an interval and moves every
+`PENDING` order to `PROCESSING`.
+
+- **Interval:** configurable via `PENDING_ORDERS_JOB_INTERVAL_MS` (defaults to
+  `300000` = 5 minutes). Tests set this to a small value so they don't wait on
+  the real interval.
+- **Started on server boot:** `src/server.js` calls `pendingOrdersJob.start()`
+  once `app.listen()` succeeds. The module also exports `stop()`, `runOnce()`
+  (a single pass, callable directly), and `getIntervalMs()`, so tests can
+  drive it deterministically with Jest fake timers instead of the real clock.
+- **Same transition logic as the API, not a copy of it.** The job calls
+  `orderService.updateOrderStatus(order.id, PROCESSING)` — the exact function
+  `PATCH /orders/:id/status` uses — instead of writing to the repository or
+  re-checking status rules itself.
+- **Race condition with cancel:** the job first lists `PENDING` orders (a
+  snapshot), then loops over that list calling `updateOrderStatus` per order.
+  `updateOrderStatus` re-fetches the order by id and re-checks
+  `canTransition()` against its *current* status, not the status captured in
+  the snapshot. So if `POST /orders/:id/cancel` runs on an order between the
+  snapshot and the loop reaching it, the order is now `CANCELLED` by the time
+  the job gets to it, `canTransition(CANCELLED, PROCESSING)` is `false`, and
+  `updateOrderStatus` throws instead of silently overwriting the
+  cancellation. The job catches that per-order, logs it, and moves on —
+  one bad order never aborts the rest of the run. Node's single-threaded,
+  non-preemptive execution model means nothing can interleave *inside* a
+  single synchronous `updateOrderStatus` call either, so there is no
+  read-then-write window to guard beyond re-checking status on every write.
+- **Logging:** each run logs `checked`/`transitioned` counts, e.g.
+  `[processPendingOrdersJob] run complete: 2/3 PENDING orders moved to
+  PROCESSING`, plus a line for any order it had to skip.
 
 ## Design decisions
 

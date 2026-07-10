@@ -3,9 +3,10 @@
 A REST API for an e-commerce order processing system: place orders, look them
 up, list/filter them, and move them through a status lifecycle.
 
-> **Status:** Phase 1 (scaffold + core API), Phase 2 (background job), and
-> Phase 3 (test suite) complete — see `peerislands-assignment-prompt.md` for
-> the phase breakdown and `AI_USAGE.md` for the AI-assistance log.
+> **Status:** Phase 1 (scaffold + core API), Phase 2 (background job),
+> Phase 3 (test suite), and Phase 4 (review pass) complete — see
+> `peerislands-assignment-prompt.md` for the phase breakdown, `AI_USAGE.md`
+> for the AI-assistance log, and `REVIEW.md` for the Phase 4 findings.
 
 ## Stack
 

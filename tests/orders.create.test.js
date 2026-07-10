@@ -18,6 +18,16 @@ describe('POST /orders', () => {
     expect(res.body.createdAt).toBe(res.body.updatedAt);
   });
 
+  it('rounds totalAmount to the nearest cent despite floating-point sums', async () => {
+    const res = await request(app)
+      .post('/orders')
+      .send(validOrderPayload({ items: [{ productId: 'p1', quantity: 3, price: 1.1 }] }));
+
+    expect(res.status).toBe(201);
+    // 3 * 1.1 sums to 3.3000000000000003 in raw floating-point arithmetic.
+    expect(res.body.totalAmount).toBe(3.3);
+  });
+
   it('rejects an empty items array with 400', async () => {
     const res = await request(app).post('/orders').send(validOrderPayload({ items: [] }));
 

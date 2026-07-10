@@ -179,4 +179,59 @@ per-test `stop()`/`clearAllTimers()` calls leave no open handles.
 
 ## Phase 4 — review pass
 
-_Not started yet._
+**Prompt used:** the "Phase 4 — review pass" prompt — review the codebase as
+a strict senior engineer for missing input validation, status-transition
+bugs, race conditions between the background job and cancel, error responses
+that leak internals, dead code, and anything that would fail under
+concurrent requests; list each issue with file/line and the fix; don't
+rewrite the whole project.
+
+**What the review found and what needed a second look:**
+
+1. **First read of `placeOrder` looked fine** — `items.reduce(...)` summing
+   `quantity * price` — until actually running it with ordinary numbers
+   (`quantity: 3, price: 1.1`) and getting `totalAmount: 3.3000000000000003`
+   back from a real request. Binary floating-point arithmetic doesn't round
+   money cleanly, and nothing in the code was rounding it either. Fixed by
+   adding `roundToCents()` in `src/services/orderService.js` and adding a
+   regression test asserting the exact rounded value.
+2. **The job's `catch` block looked like reasonable race-handling at a
+   glance** (`src/jobs/processPendingOrdersJob.js`), but on closer reading it
+   swallowed *any* thrown error with the same `console.warn` "skipped order"
+   message — a real bug (bad data, a future `NotFoundError` from a delete
+   endpoint, anything) would look identical in the logs to the expected
+   "this order was cancelled mid-run" case. Fixed by checking
+   `err instanceof ConflictError` specifically for the expected case and
+   logging anything else via `console.error` with a distinct message, without
+   changing the loop's continue-on-error behavior.
+3. **Went looking for the race condition between cancel and the job a second
+   time**, since that's the marquee failure mode this exact assignment tests
+   for, specifically trying to find a gap the Phase 2/3 work missed. Didn't
+   find an active one — `updateOrderStatus` re-checks status per order at
+   write time, and the mid-run test in `tests/backgroundJob.test.js` already
+   exercises it — but documented in `REVIEW.md` that the read-then-write
+   pattern only stays race-free because the repository is synchronous today;
+   an async DB-backed repository would need an explicit guard (transaction or
+   optimistic concurrency check) that doesn't exist yet. Recorded as a design
+   note rather than invented code for a repository that isn't there.
+4. **Checked whether `req.query = result.data` in `validate.js` was actually
+   safe** — it is, under the pinned Express 4, but `req.query` becomes a
+   getter-only property in Express 5, so this line would throw on a future
+   major-version bump. Not fixed (nothing is broken against the dependency
+   actually installed) but recorded in `REVIEW.md` as a known
+   upgrade trap.
+5. **Looked for dead code** and found two exports with no consumers outside
+   their own module (`InMemoryOrderRepository` the class, and
+   `ALLOWED_TRANSITIONS` the raw map) — flagged as the closest thing to dead
+   code in the repo, left alone since both have a legitimate reason to be
+   exported (test flexibility, single-source-of-truth documentation).
+6. **Re-checked validation, status transitions, and error-leak categories
+   from scratch** rather than assuming the earlier phases' fixes still held,
+   specifically re-testing the `PATCH .../status { status: "CANCELLED" }`
+   case that was the headline bug in the Phase 1 log entry. All still correct
+   — no new issues in these categories, which is a real reason not to
+   invent findings just to pad this section.
+
+**Verification:** `npm test` — 6 suites, 27 tests (26 from Phase 3 + the new
+rounding regression test), all passing, after applying fixes 1 and 2. Full
+findings, including the three documented-only items, are in `REVIEW.md`.
